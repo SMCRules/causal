@@ -279,7 +279,7 @@ samples_urban = model.simulate(
     n_samples=N, 
     do={'residential_location': 'Urban'}, 
     show_progress=False,
-    seed=42
+    seed=100
     )
 samples_urban_clean = clean_simulated_data(samples_urban)
 
@@ -287,21 +287,42 @@ samples_rural = model.simulate(
     n_samples=N, 
     do={'residential_location': 'Rural'}, 
     show_progress=False,
-    seed=42
+    seed=100
     )
 samples_rural_clean = clean_simulated_data(samples_rural)
 
-residential_location_OR = get_OR_for_treatment(samples_urban_clean, samples_rural_clean)   
+residential_location_OR = get_OR_for_treatment(
+    samples_urban_clean, 
+    samples_rural_clean
+    )   
 print(f'True odds ratio (Urban vs. Rural): {residential_location_OR:.4f}\nTrue log odds ratio (Urban vs. Rural): {np.log(residential_location_OR):.4f}')
 
-"""
-# Smoking
-samples_smoke_no = model.simulate(n_samples=N, do={'smoking': 'No'}, show_progress=False)
-samples_smoke_yes = model.simulate(n_samples=N, do={'smoking': 'Yes'}, show_progress=False)
 
-smoking_OR = get_OR_for_treatment(samples_smoke_yes, samples_smoke_no)  
+# Smoking
+samples_smoke_no = model.simulate(
+    n_samples=N, 
+    do={'smoking': 'No'}, 
+    show_progress=False,
+    seed=100
+    )
+samples_smoke_no_clean = clean_simulated_data(samples_smoke_no)
+
+samples_smoke_yes = model.simulate(
+    n_samples=N, 
+    do={'smoking': 'Yes'}, 
+    show_progress=False,
+    seed=100
+    )
+
+samples_smoke_yes_clean = clean_simulated_data(samples_smoke_yes)
+
+smoking_OR = get_OR_for_treatment(
+    samples_smoke_yes_clean, 
+    samples_smoke_no_clean
+    )  
 print(f'True odds ratio (Smoking vs. Non-Smoking): {smoking_OR:.4f}\nTrue log odds ratio (Smoking vs. Non-Smoking): {np.log(smoking_OR):.4f}')
 
+"""
 # Lung Function
 samples_lung_fun_ref = model.simulate(n_samples=N, do={'lung_function': 'impaired'}, show_progress=False)
 samples_lung_fun_imp = model.simulate(n_samples=N, do={'lung_function': 'normal'}, show_progress=False)
