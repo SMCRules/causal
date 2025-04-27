@@ -131,5 +131,78 @@ graphviz.Source(dot.to_string())
 # import os
 # os.system('xdg-open dag_output.pdf')
 
+# data simulation
+N = 10_000
+# Generate N observations from the model, which are based on the provided CPDs and the DAG
+df = model.simulate(n_samples=N, show_progress=False)
+df.sample(10)
+
+# set an explicit reference category, as we want the "normal" level of 
+# lung function to be the reference level in the analysis
+df['lung_function'] = pd.Categorical(
+    df['lung_function'],
+    categories=['normal', 'impaired', 'severely_impaired']
+)
+
+
+### CPD Inspection
+df['residential_location'].value_counts(normalize=True)\
+    .to_frame().round(2)
+
+df.groupby('residential_location')['smoking'].value_counts(normalize=True)\
+.to_frame().round(2).sort_index()
+
+df.groupby(['residential_location', 'smoking'])['lung_function'].value_counts(normalize=True)\
+    .to_frame().round(2).sort_index()
+
+df.groupby('lung_function', observed=False)['lung_cancer_death'].value_counts(normalize=True)\
+    .to_frame().round(2).sort_index()
+
+
+### Fit a Model With All Covariates
+model_full = smf.glm(
+    formula='lung_cancer_death ~ smoking + lung_function + residential_location',
+    data=df,
+    family=sm.families.Binomial()
+).fit()
+
+print(model_full.summary())
+
+y_pred_probs = model_full.predict(df)
+y_true = df['lung_cancer_death']
+roc_auc = roc_auc_score(y_true, y_pred_probs)
+print(f"\nROC AUC: {roc_auc:.2f}")
+
+full_model_OR = get_coef_from_statmodels_model(model_full)
+full_model_OR = np.exp(full_model_OR).rename(columns={'coef': 'full_OR'})
+print(full_model_OR.round(2))
+
+#  Marginal Odds-Ratios
+
+marginal_OR = {}
+marginal_OR['residential_location'] = get_OR_for_treatment(
+    df[df['residential_location'] == 'Urban'],
+    df[df['residential_location'] == 'Rural']
+)
+
+marginal_OR['smoking'] = get_OR_for_treatment(
+    df[df['smoking'] == 'Yes'],
+    df[df['smoking'] == 'No']
+)
+
+marginal_OR['lung_function_sev_imp'] = get_OR_for_treatment(
+    df[df['lung_function'] == 'severely_impaired'],
+    df[df['lung_function'] == 'normal']
+)
+
+marginal_OR['lung_function_imp'] = get_OR_for_treatment(
+    df[df['lung_function'] == 'impaired'],
+    df[df['lung_function'] == 'normal']
+)
+
+marginal_OR = pd.Series(marginal_OR, name='marginal_OR').to_frame()
+print(marginal_OR.round(2))
+
+
 
 
