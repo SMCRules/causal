@@ -12,11 +12,12 @@ from io import StringIO
 from pgmpy.factors.discrete import TabularCPD
 from pgmpy.models import DiscreteBayesianNetwork
 from sklearn.metrics import roc_auc_score
+from pandas.api.types import CategoricalDtype
 
 np.random.seed(100)
 
 # Only for the sake of cleaner output in this example
-# logging.getLogger("pgmpy").setLevel(logging.ERROR) 
+logging.getLogger("pgmpy").setLevel(logging.ERROR) 
 
 ### Functions
 def get_OR_for_treatment(df_a, df_b, outcome_col='lung_cancer_death'):
@@ -38,6 +39,24 @@ def get_coef_from_statmodels_model(model, coef_name=None):
     summary_coefs = pd.read_html(StringIO(model.summary().tables[1].as_html()), header=0, index_col=0)[0]['coef']
     return summary_coefs.to_frame() if coef_name is None else summary_coefs[coef_name]
 
+def clean_simulated_data(df):
+    """
+    Cleans a simulated dataframe by converting Categorical columns:
+    - Converts binary 0/1 categories to int
+    - Converts multi-class categories to string
+    Returns a copy of the cleaned dataframe.
+    """
+    df_clean = df.copy()
+
+    for col in df_clean.columns:
+        if isinstance(df_clean[col].dtype, CategoricalDtype):
+            categories = set(df_clean[col].cat.categories)
+            if categories <= {0, 1}:  # Only 0/1 values
+                df_clean[col] = df_clean[col].astype(int)
+            else:
+                df_clean[col] = df_clean[col].astype(str)
+    
+    return df_clean
 
 ### Conditional Probability Distributions (CPDs)
 
@@ -131,52 +150,57 @@ graphviz.Source(dot.to_string())
 # import os
 # os.system('xdg-open dag_output.pdf')
 
-# data simulation
+# data simulation, N observations based on the provided CPDs and the DAG
 N = 10_000
-# Generate N observations from the model, which are based on the provided CPDs and the DAG
 df = model.simulate(n_samples=N, show_progress=False)
-df.sample(10)
+# print(df.sample(10))
 
-# set an explicit reference category, as we want the "normal" level of 
-# lung function to be the reference level in the analysis
-df['lung_function'] = pd.Categorical(
-    df['lung_function'],
-    categories=['normal', 'impaired', 'severely_impaired']
+### Clean df after simulation for modeling
+df_clean = clean_simulated_data(df)
+
+# set an explicit reference category (important for modeling!)
+df_clean['lung_function'] = pd.Categorical(
+    df_clean['lung_function'], categories=['normal', 'impaired', 'severely_impaired']
 )
 
-
 ### CPD Inspection
-df['residential_location'].value_counts(normalize=True)\
-    .to_frame().round(2)
+print(df_clean['residential_location'].value_counts(normalize=True).to_frame().round(2))
 
-df.groupby('residential_location')['smoking'].value_counts(normalize=True)\
-.to_frame().round(2).sort_index()
+print(df_clean.groupby(
+    'residential_location'
+)['smoking'].value_counts(normalize=True).to_frame().round(2).sort_index())
 
-df.groupby(['residential_location', 'smoking'])['lung_function'].value_counts(normalize=True)\
-    .to_frame().round(2).sort_index()
+print(df_clean.groupby(
+    ['residential_location', 'smoking']
+)['lung_function'].value_counts(normalize=True).to_frame().round(2).sort_index())
 
-df.groupby('lung_function', observed=False)['lung_cancer_death'].value_counts(normalize=True)\
-    .to_frame().round(2).sort_index()
+print(df_clean.groupby(
+    'lung_function', observed=False
+)['lung_cancer_death'].value_counts(normalize=True).to_frame().round(2).sort_index())
 
+# tiny diagnostic to run
+print(df_clean['lung_cancer_death'].dtype)
+print(df_clean['lung_cancer_death'].unique())
 
 ### Fit a Model With All Covariates
 model_full = smf.glm(
     formula='lung_cancer_death ~ smoking + lung_function + residential_location',
-    data=df,
+    data=df_clean,
     family=sm.families.Binomial()
 ).fit()
 
 print(model_full.summary())
 
-y_pred_probs = model_full.predict(df)
-y_true = df['lung_cancer_death']
+y_pred_probs = model_full.predict(df_clean)
+y_true = df_clean['lung_cancer_death']
 roc_auc = roc_auc_score(y_true, y_pred_probs)
 print(f"\nROC AUC: {roc_auc:.2f}")
 
-full_model_OR = get_coef_from_statmodels_model(model_full)
-full_model_OR = np.exp(full_model_OR).rename(columns={'coef': 'full_OR'})
-print(full_model_OR.round(2))
+# full_model_OR = get_coef_from_statmodels_model(model_full)
+# full_model_OR = np.exp(full_model_OR).rename(columns={'coef': 'full_OR'})
+# print(full_model_OR.round(2))
 
+"""
 #  Marginal Odds-Ratios
 
 marginal_OR = {}
@@ -202,6 +226,7 @@ marginal_OR['lung_function_imp'] = get_OR_for_treatment(
 
 marginal_OR = pd.Series(marginal_OR, name='marginal_OR').to_frame()
 print(marginal_OR.round(2))
+"""
 
 
 
