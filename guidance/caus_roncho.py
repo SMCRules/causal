@@ -152,7 +152,7 @@ graphviz.Source(dot.to_string())
 
 # data simulation, N observations based on the provided CPDs and the DAG
 N = 10_000
-df = model.simulate(n_samples=N, show_progress=False)
+df = model.simulate(n_samples=N, show_progress=False, seed=42)
 # print(df.sample(10))
 
 ### Clean df after simulation for modeling
@@ -196,38 +196,130 @@ y_true = df_clean['lung_cancer_death']
 roc_auc = roc_auc_score(y_true, y_pred_probs)
 print(f"\nROC AUC: {roc_auc:.2f}")
 
-# full_model_OR = get_coef_from_statmodels_model(model_full)
-# full_model_OR = np.exp(full_model_OR).rename(columns={'coef': 'full_OR'})
-# print(full_model_OR.round(2))
+full_model_OR = get_coef_from_statmodels_model(model_full)
+full_model_OR = np.exp(full_model_OR).rename(columns={'coef': 'full_OR'})
+print(full_model_OR.round(2))
 
-"""
-#  Marginal Odds-Ratios
+###  Marginal Odds-Ratios
 
 marginal_OR = {}
 marginal_OR['residential_location'] = get_OR_for_treatment(
-    df[df['residential_location'] == 'Urban'],
-    df[df['residential_location'] == 'Rural']
+    df_clean[df_clean['residential_location'] == 'Urban'],
+    df_clean[df_clean['residential_location'] == 'Rural']
 )
 
 marginal_OR['smoking'] = get_OR_for_treatment(
-    df[df['smoking'] == 'Yes'],
-    df[df['smoking'] == 'No']
+    df_clean[df_clean['smoking'] == 'Yes'],
+    df_clean[df_clean['smoking'] == 'No']
 )
 
 marginal_OR['lung_function_sev_imp'] = get_OR_for_treatment(
-    df[df['lung_function'] == 'severely_impaired'],
-    df[df['lung_function'] == 'normal']
+    df_clean[df_clean['lung_function'] == 'severely_impaired'],
+    df_clean[df_clean['lung_function'] == 'normal']
 )
 
 marginal_OR['lung_function_imp'] = get_OR_for_treatment(
-    df[df['lung_function'] == 'impaired'],
-    df[df['lung_function'] == 'normal']
+    df_clean[df_clean['lung_function'] == 'impaired'],
+    df_clean[df_clean['lung_function'] == 'normal']
 )
 
 marginal_OR = pd.Series(marginal_OR, name='marginal_OR').to_frame()
 print(marginal_OR.round(2))
+
+### Adjusted Models
+adjusted_OR = {}
+# residential Location
+model_adj = smf.glm(
+    formula='lung_cancer_death ~ residential_location',
+    data=df_clean,
+    family=sm.families.Binomial()
+).fit()
+
+adjusted_OR['residential_location'] = get_coef_from_statmodels_model(
+    model_adj, 'residential_location[T.Urban]'
+    )
+print(model_adj.summary())
+
+
+# smoking
+model_adj = smf.glm(
+    formula='lung_cancer_death ~ residential_location + smoking',
+    data=df_clean,
+    family=sm.families.Binomial()
+).fit()
+adjusted_OR['smoking'] = get_coef_from_statmodels_model(model_adj, 'smoking[T.Yes]')
+
+print(model_adj.summary())
+
+
+# lung Function
+model_adj = smf.glm(
+    formula='lung_cancer_death ~ lung_function + smoking',
+    data=df_clean,
+    family=sm.families.Binomial()
+).fit()
+
+adjusted_OR['lung_function_imp'] = get_coef_from_statmodels_model(
+    model_adj, 'lung_function[T.impaired]'
+    )
+adjusted_OR['lung_function_sev_imp'] = get_coef_from_statmodels_model(
+    model_adj, 'lung_function[T.severely_impaired]'
+    )
+
+print(model_adj.summary())
+
+# summarize adjusted odds ratios
+adjusted_OR = np.exp(pd.Series(adjusted_OR)).to_frame().rename(columns={0: 'adjusted_OR'}).round(2)
+print(adjusted_OR)
+
+
+### True Causal Effects via Simulation
+# Residential Location, fixing seed and cleaning simulated data fixes ORs
+samples_urban = model.simulate(
+    n_samples=N, 
+    do={'residential_location': 'Urban'}, 
+    show_progress=False,
+    seed=42
+    )
+samples_urban_clean = clean_simulated_data(samples_urban)
+
+samples_rural = model.simulate(
+    n_samples=N, 
+    do={'residential_location': 'Rural'}, 
+    show_progress=False,
+    seed=42
+    )
+samples_rural_clean = clean_simulated_data(samples_rural)
+
+residential_location_OR = get_OR_for_treatment(samples_urban_clean, samples_rural_clean)   
+print(f'True odds ratio (Urban vs. Rural): {residential_location_OR:.4f}\nTrue log odds ratio (Urban vs. Rural): {np.log(residential_location_OR):.4f}')
+
 """
+# Smoking
+samples_smoke_no = model.simulate(n_samples=N, do={'smoking': 'No'}, show_progress=False)
+samples_smoke_yes = model.simulate(n_samples=N, do={'smoking': 'Yes'}, show_progress=False)
 
+smoking_OR = get_OR_for_treatment(samples_smoke_yes, samples_smoke_no)  
+print(f'True odds ratio (Smoking vs. Non-Smoking): {smoking_OR:.4f}\nTrue log odds ratio (Smoking vs. Non-Smoking): {np.log(smoking_OR):.4f}')
 
+# Lung Function
+samples_lung_fun_ref = model.simulate(n_samples=N, do={'lung_function': 'impaired'}, show_progress=False)
+samples_lung_fun_imp = model.simulate(n_samples=N, do={'lung_function': 'normal'}, show_progress=False)
+samples_lung_fun_sev_imp = model.simulate(n_samples=N, do={'lung_function': 'severely_impaired'}, show_progress=False)
 
+lung_fun_imp_OR = get_OR_for_treatment(samples_lung_fun_imp, samples_lung_fun_ref)
+lung_fun_sev_imp_OR = get_OR_for_treatment(samples_lung_fun_sev_imp, samples_lung_fun_ref)
 
+print(f'True odds ratio (Impaired vs. Normal): {lung_fun_imp_OR:.4f}\nTrue log odds ratio (Impaired vs. Normal): {np.log(lung_fun_imp_OR):.4f}')
+print(f'\nTrue odds ratio (Severely Impaired vs. Normal): {lung_fun_sev_imp_OR:.4f}\nTrue log odds ratio (Severely Impaired vs. Normal): {np.log(lung_fun_sev_imp_OR):.4f}')
+
+# Summarize true odds ratios
+
+true_OR = pd.Series({
+    'residential_location': residential_location_OR,
+    'smoking': smoking_OR,
+    'lung_function_imp': lung_fun_imp_OR,
+    'lung_function_sev_imp': lung_fun_sev_imp_OR
+}, name='true_OR').to_frame()
+print(true_OR.round(2))
+"""
