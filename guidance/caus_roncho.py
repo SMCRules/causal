@@ -146,9 +146,9 @@ dot = model.to_graphviz()
 dot.graph_attr.update(ratio=0.5)
 graphviz.Source(dot.to_string())
 # Write to file and layout
-# dot.draw('dag_output.pdf', prog='dot')
+# dot.draw('dag_cpds_output.pdf', prog='dot')
 # import os
-# os.system('xdg-open dag_output.pdf')
+# os.system('xdg-open dag_cpds_output.pdf')
 
 # data simulation, N observations based on the provided CPDs and the DAG
 N = 10_000
@@ -272,7 +272,6 @@ print(model_adj.summary())
 adjusted_OR = np.exp(pd.Series(adjusted_OR)).to_frame().rename(columns={0: 'adjusted_OR'}).round(2)
 print(adjusted_OR)
 
-
 ### True Causal Effects via Simulation
 # Residential Location, fixing seed and cleaning simulated data fixes ORs
 samples_urban = model.simulate(
@@ -296,7 +295,6 @@ residential_location_OR = get_OR_for_treatment(
     samples_rural_clean
     )   
 print(f'True odds ratio (Urban vs. Rural): {residential_location_OR:.4f}\nTrue log odds ratio (Urban vs. Rural): {np.log(residential_location_OR):.4f}')
-
 
 # Smoking
 samples_smoke_no = model.simulate(
@@ -322,20 +320,46 @@ smoking_OR = get_OR_for_treatment(
     )  
 print(f'True odds ratio (Smoking vs. Non-Smoking): {smoking_OR:.4f}\nTrue log odds ratio (Smoking vs. Non-Smoking): {np.log(smoking_OR):.4f}')
 
-"""
 # Lung Function
-samples_lung_fun_ref = model.simulate(n_samples=N, do={'lung_function': 'impaired'}, show_progress=False)
-samples_lung_fun_imp = model.simulate(n_samples=N, do={'lung_function': 'normal'}, show_progress=False)
-samples_lung_fun_sev_imp = model.simulate(n_samples=N, do={'lung_function': 'severely_impaired'}, show_progress=False)
+samples_lung_fun_ref = model.simulate(
+    n_samples=N, 
+    do={'lung_function': 'impaired'}, 
+    show_progress=False,
+    seed=100
+    )
+samples_lung_fun_ref_clean = clean_simulated_data(samples_lung_fun_ref)
 
-lung_fun_imp_OR = get_OR_for_treatment(samples_lung_fun_imp, samples_lung_fun_ref)
-lung_fun_sev_imp_OR = get_OR_for_treatment(samples_lung_fun_sev_imp, samples_lung_fun_ref)
+samples_lung_fun_imp = model.simulate(
+    n_samples=N, 
+    do={'lung_function': 'normal'}, 
+    show_progress=False,
+    seed=100
+    )
+
+samples_lung_fun_imp_clean = clean_simulated_data(samples_lung_fun_imp)
+
+samples_lung_fun_sev_imp = model.simulate(
+    n_samples=N, 
+    do={'lung_function': 'severely_impaired'}, 
+    show_progress=False,
+    seed=100
+    )
+
+samples_lung_fun_sev_imp_clean = clean_simulated_data(samples_lung_fun_sev_imp)
+
+lung_fun_imp_OR = get_OR_for_treatment(
+    samples_lung_fun_imp_clean, 
+    samples_lung_fun_ref_clean
+    )
+lung_fun_sev_imp_OR = get_OR_for_treatment(
+    samples_lung_fun_sev_imp_clean, 
+    samples_lung_fun_ref_clean
+    )
 
 print(f'True odds ratio (Impaired vs. Normal): {lung_fun_imp_OR:.4f}\nTrue log odds ratio (Impaired vs. Normal): {np.log(lung_fun_imp_OR):.4f}')
 print(f'\nTrue odds ratio (Severely Impaired vs. Normal): {lung_fun_sev_imp_OR:.4f}\nTrue log odds ratio (Severely Impaired vs. Normal): {np.log(lung_fun_sev_imp_OR):.4f}')
 
 # Summarize true odds ratios
-
 true_OR = pd.Series({
     'residential_location': residential_location_OR,
     'smoking': smoking_OR,
@@ -343,4 +367,108 @@ true_OR = pd.Series({
     'lung_function_sev_imp': lung_fun_sev_imp_OR
 }, name='true_OR').to_frame()
 print(true_OR.round(2))
-"""
+
+
+### SHAP values
+X = pd.get_dummies(df_clean.drop("lung_cancer_death", axis=1), drop_first=True)
+y = df["lung_cancer_death"]
+
+xgb_model = xgb.XGBClassifier(random_state=1)
+xgb_model.fit(X, y)
+
+roc_auc = roc_auc_score(y, xgb_model.predict_proba(X)[:, 1])
+print(f"ROC AUC: {roc_auc:.2f}")
+
+explainer = shap.TreeExplainer(xgb_model)
+shap_values = explainer.shap_values(X)
+
+mean_abs_shap = np.abs(shap_values).mean(axis=0)
+shap_summary_df = pd.DataFrame({
+    "Feature": X.columns,
+    "mean_abs_SHAP": mean_abs_shap
+}).sort_values("mean_abs_SHAP", ascending=False)
+
+print(shap_summary_df.round(3))
+
+shap.summary_plot(shap_values, X, plot_type="bar", show=False, rng=1)
+ax = plt.gca()
+ax.set_title("Mean Absolute SHAP Values by Feature", fontsize=10)
+ax.set_xlabel('Mean Absolute SHAP Value', fontsize=10)
+ax.tick_params(axis='y', labelsize=11)
+plt.tight_layout()  
+plt.show()  
+
+
+### Results
+full_model_OR.drop(index=['Intercept'], inplace=True)
+full_model_OR.rename(
+    index={
+        'smoking[T.Yes]': 'smoking', 'lung_function[T.impaired]': 'lung_function_imp',
+        'lung_function[T.severely_impaired]': 'lung_function_sev_imp', 
+        'residential_location[T.Urban]': 'residential_location'
+        }, 
+    inplace=True
+)
+
+shap_summary_df = shap_summary_df.set_index('Feature').rename(
+    index={
+        'smoking_Yes': 'smoking', 'lung_function_severely_impaired': 'lung_function_sev_imp',
+        'lung_function_impaired': 'lung_function_imp', 'residential_location_Urban': 'residential_location'
+        }
+)
+
+dfs = [full_model_OR, true_OR, marginal_OR, shap_summary_df, adjusted_OR]
+results = reduce(lambda left, right: left.merge(right, left_index=True, right_index=True), dfs)
+
+print(results.round(2))
+
+plot_cols = ['full_OR', 'true_OR', 'marginal_OR']
+ax = results.loc[:, plot_cols].plot(kind='bar', figsize=(8, 5))
+ax.set_ylabel("Odds Ratio")
+ax.set_title("Comparison of Different Odds Ratios Estimates")
+
+ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
+
+new_labels = ["Full Model", "True", "Marginal"]
+plt.legend(labels=new_labels)
+plt.tight_layout()
+plt.show() 
+
+# Normalize "true_OR" so it sums to 1
+results["true_OR_norm"] = results["true_OR"] / results["true_OR"].sum()
+
+# Normalize "Mean Absolute SHAP Value" so it sums to 1
+results["mean_abs_shap_norm"] = (
+    results["mean_abs_SHAP"] / results["mean_abs_SHAP"].sum()
+)
+
+ax = results[["true_OR_norm", "mean_abs_shap_norm"]].plot(kind="bar", figsize=(8, 5))
+ax.set_ylabel("Normalized Value")
+ax.set_title("Normalized True Odds Ratio vs. Normalized Mean Absolute SHAP Value")
+ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
+new_labels = ["True effect (norm)", "Mean abs. SHAP (norm)"]
+plt.legend(labels=new_labels)
+plt.tight_layout()
+plt.show()
+
+
+# Full Model Assumptions DAG
+
+model = DiscreteBayesianNetwork([
+    ('residential_location', 'lung_cancer_death'),
+    ('smoking', 'lung_cancer_death'),
+    ('lung_function', 'lung_cancer_death')
+])
+
+dot = model.to_graphviz()
+dot.graph_attr.update(ratio=0.4)
+graphviz.Source(dot.to_string())
+# Write to file and layout
+# dot.draw('dag_full_model_output.pdf', prog='dot')
+
+
+
+
+
+
+
